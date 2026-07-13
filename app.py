@@ -96,7 +96,17 @@ def _render_answer(result, key: str) -> None:
     # Gerekçelerdeki anonim etiketler (A/B/...) kullanıcıya model adı olarak
     # gösterilir (D-023) — modeller etiket gördü, kullanıcı isim görür.
     labels = getattr(result, "labels", {}) or {}
-    with st.expander("details"):
+
+    # st.expander DURUMSUZDUR (D-029): içindeki bir widget'a (drafts toggle)
+    # dokunmak script'i yeniden çalıştırır ve expander sessizce KAPANIR — bu da
+    # "details'e hiç tıklamamışım gibi" hatasını yaratır. Expander'ın açık/kapalı
+    # durumunu kendimiz session_state'te tutup expanded=... ile besliyoruz.
+    # key tur başına kararlıdır (canlı render ve loop aynı değeri verir, teyit
+    # edildi), o yüzden güvenli. Toggle'ın on_change'i bu bayrağı True yapar:
+    # expander'ı kapatan etkileşim, artık onu açık TUTAN etkileşim olur.
+    open_key = f"details_open_{key}"
+    st.session_state.setdefault(open_key, False)
+    with st.expander("details", expanded=st.session_state[open_key]):
         st.markdown('<div class="section-label">judge · why this won</div>',
                     unsafe_allow_html=True)
         st.markdown(
@@ -133,8 +143,11 @@ def _render_answer(result, key: str) -> None:
         # içine expander koymak Streamlit'te yasak — toggle + sekme kullanılır.
         # key zorunlu: her tur kendi widget kimliğini taşımalı, yoksa ikinci
         # soruda DuplicateWidgetID hatası.
+        # on_change (D-029): toggle'a dokununca, rerun expander'ı yeniden
+        # boyamadan ÖNCE açık-bayrağını pinle. Böylece details kapanmaz.
         if st.toggle("show the answers behind the synthesis",
-                     key=f"drafts-{key}"):
+                     key=f"drafts-{key}",
+                     on_change=lambda k=open_key: st.session_state.__setitem__(k, True)):
             tabs = st.tabs([
                 f"{'◆' if c.model_id == winner else '◇'} {c.model_name or c.model_id}"
                 for c in result.candidates

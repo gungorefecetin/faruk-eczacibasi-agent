@@ -449,3 +449,20 @@ The synthesizer prompt now demands the rationale be written in **past tense, des
 **Payloads are real data, not decoration:** the candidate count exposes fail-open in real time (a "judging 2 candidates…" out of 5 models is honest), and the winner's name is shown during synthesis — the longest wait becomes the most informative moment. Verified live: stages advanced at t=0.5s / 25.3s / 27.4s with the answer at 42.1s, and the line is cleared in a `finally` on every path including errors.
 
 **Overturned if:** the UI ever needs intra-stage progress (per-model completion ticks during fanout — the event vocabulary extends naturally), or a remote/multi-process UI appears (then the callback becomes a queue at the boundary, not in `core/`).
+
+---
+
+## D-029 — Persist the `details` expander's open state across reruns
+
+**Date:** 2026-07-10
+**Status:** Accepted
+
+The `details` expander is now driven by `st.expander("details", expanded=st.session_state[open_key])`, and the drafts toggle carries an `on_change` that pins `open_key = True`.
+
+**Bug:** open `details`, then click "show the answers behind the synthesis" — `details` snapped shut, as if it had never been opened, so the newly-shown drafts appeared under a collapsed panel. **Root cause:** `st.expander` is *stateless* — it has no key and no way to persist open/closed across reruns. Any inner-widget interaction reruns the script, and the expander repaints at its default (collapsed). The toggle *did* remember its own state (it has a key), so the panel closed underneath a toggle that was still on — the confusing symptom.
+
+**Fix:** lift the open-state into `session_state` under a per-turn key. The winning subtlety is *where* the flag gets set: `st.expander` emits no change event, so the user manually opening it can't be captured — but the reported bug is specifically "the toggle closes details," and Streamlit runs widget `on_change` callbacks **before** the script re-executes. So the toggle's `on_change` sets the flag `True` *before* the expander is repainted → the interaction that used to collapse details now keeps it open. Verified live against the exact repro: ask → open details → click toggle → details stayed open **and** drafts rendered.
+
+**Why the per-turn key is safe:** the open-key reuses `_render_answer`'s `key`, which is the turn index. Verified (separately) that the two render paths agree per turn — the live-render path uses `len(turns)` *before* the append and the history-loop uses `enumerate` index, and these coincide for every turn. Had they diverged, the flag would have leaked between turns.
+
+**Overturned if:** Streamlit gives `st.expander` a real `key`/persisted state (then drop the manual flag), or a future interaction needs to *close* details programmatically (add the inverse setter).
