@@ -1,0 +1,6 @@
+{
+  "api_key": "",
+  "api_version": "2024-08-01-preview",
+  "azure_endpoint": "https://YOUR-RESOURCE-NAME.openai.azure.com/",
+  "deployment_name": "your-gpt-deployment-name"
+}

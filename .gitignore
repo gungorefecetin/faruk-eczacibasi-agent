@@ -1,0 +1,8 @@
+.env
+config.json
+config.grok.json
+config.kimi.json
+__pycache__/
+*.pyc
+.venv/
+venv/

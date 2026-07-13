@@ -1,0 +1,217 @@
+import json
+import os
+from pathlib import Path
+
+from core.providers import (
+    AnthropicProvider,
+    AzureInferenceProvider,
+    AzureOpenAIProvider,
+    OpenAIProvider,
+    Provider,
+)
+
+TIMEOUT_S = 60
+MIN_CANDIDATES = 2  # bu sayının altında başarılı cevap varsa pipeline durur
+FANOUT_GRACE_S = 8  # MIN aday geldikten sonra geç kalanlar için bekleme (D-017)
+
+# Sentez, hattın SON ve en değerli çağrısı: tüm taslaklar + judge zaten ödendi.
+# 60s'de kesip kazanan taslağı (muhtemelen kırpılmış) sunmak, 40sn daha bekleyip
+# gerçek sentezi almaktan kesinlikle kötü. Yavaş üretici (claude ~24 tok/s kötü
+# gününde) + uzun soru = 60s yetmiyor; canlı vakada tam bu yaşandı (D-022).
+SYNTH_TIMEOUT_S = 120
+
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+_ROOT = Path(__file__).resolve().parent.parent
+
+# Azure hakem yapılandırması. Repo kökünde beklenir; anahtar içerdiği için
+# gitignore'lanmıştır. Yoksa hakem Claude/OpenAI/Gemini'ye düşer (fail-open).
+AZURE_CONFIG_PATH = _ROOT / "config.json"
+
+# Azure AI Foundry inference proposer'ları (Grok, Kimi). Her biri kendi
+# gitignore'lu config dosyasından okunur. Alanlar: endpoint, api_key_env, model.
+# (api_key_env adı config'de öyle geçse de içinde ham anahtar var — env değil.)
+FOUNDRY_CONFIGS = {
+    "grok": _ROOT / "config.grok.json",
+    "kimi": _ROOT / "config.kimi.json",
+}
+
+# Proposer (taslak) token bütçeleri, model başına (D-021). Ölçüme dayalı:
+#  - grok  ~30 tok/s üretiyor; bütçe = doğrudan gecikme kolu (1024 ≈ ~15s).
+#  - kimi  hızlı (~90 tok/s) ama reasoning modeli: görünür cevaptan ÖNCE gizli
+#    düşünmeye token yakar. 1024'te bile sık sık BOŞ döndü — cömert bütçe şart.
+#  - claude uzun yazar; 1024 cap ölçümde 43s -> 22s indirdi.
+# Burada olmayan model Provider varsayılanını (2048) kullanır.
+PROPOSER_TOKEN_BUDGETS = {
+    "grok": 1024,
+    "kimi": 4096,
+    "claude": 1024,
+}
+
+# Sentez bütçeleri, model başına (D-027). Varsayılan 4096. Kimi reasoning
+# modeli: 4096'da uzun yapılandırılmış sentez TOKEN_LIMIT_REACHED ile ortadan
+# kesildi (canlı vaka); 12000'de doğal bitti (ölçüldü: 9061 token kullandı).
+# grok BİLEREK 4096'da: ~30 tok/s hızında daha büyük bütçe SYNTH_TIMEOUT_S'i
+# (120s) aşar — kesik cevap yerine timeout+fallback riski yaratır.
+SYNTH_TOKEN_BUDGETS = {
+    "kimi": 12000,
+}
+
+LANGUAGE_RULE = "Write your answer in the same language as the user's question."
+
+
+def _has_key(env_var: str) -> bool:
+    """Anahtar tanımlı ve boş değilse True. Boş .env satırları eksik sayılır."""
+    return bool(os.environ.get(env_var, "").strip())
+
+
+def _load_azure_config() -> dict[str, str] | None:
+    """config.json'u oku. Dosya yok/bozuk/eksik alanlıysa None (hakem düşer).
+
+    Beklenen alanlar: api_key, api_version, azure_endpoint, deployment_name.
+    """
+    if not AZURE_CONFIG_PATH.exists():
+        return None
+    try:
+        data = json.loads(AZURE_CONFIG_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    required = ("api_key", "api_version", "azure_endpoint", "deployment_name")
+    if not all(data.get(k) for k in required):
+        return None
+    return data
+
+
+def _load_foundry_config(path: Path) -> dict[str, str] | None:
+    """Foundry inference config'ini oku. Yok/bozuk/eksik ise None (model düşer).
+
+    Beklenen alanlar: endpoint, api_key_env (ham anahtar), model.
+    """
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    required = ("endpoint", "api_key_env", "model")
+    if not all(data.get(k) for k in required):
+        return None
+    return data
+
+
+def build_pool() -> dict[str, Provider]:
+    """model_id -> Provider. Yalnızca anahtarı olan modeller havuza girer.
+
+    Fail-open (D-008) inşa zamanına genişletildi: anahtarı olmayan bir model
+    sessizce havuzdan düşer, KeyError ile pipeline'ı düşürmez.
+    """
+    pool: dict[str, Provider] = {}
+
+    if _has_key("OPENAI_API_KEY"):
+        pool["chatgpt"] = OpenAIProvider(
+            model="gpt-4o",
+            api_key_env="OPENAI_API_KEY",
+        )
+    if _has_key("ANTHROPIC_API_KEY"):
+        pool["claude"] = AnthropicProvider(
+            model="claude-sonnet-4-5",
+            api_key_env="ANTHROPIC_API_KEY",
+            proposer_max_tokens=PROPOSER_TOKEN_BUDGETS["claude"],
+        )
+    if _has_key("GEMINI_API_KEY"):
+        pool["gemini"] = OpenAIProvider(
+            model="gemini-3.5-flash",
+            base_url=GEMINI_BASE_URL,
+            api_key_env="GEMINI_API_KEY",
+        )
+    # Azure Foundry inference proposer'ları (Grok, Kimi). config dosyası varsa
+    # havuza girer; yoksa sessizce atlanır (fail-open, D-010). Grok artık xAI
+    # doğrudan yerine Azure üzerinden — bu yüzden ayrı XAI_API_KEY dalı yok.
+    for model_id, path in FOUNDRY_CONFIGS.items():
+        fcfg = _load_foundry_config(path)
+        if fcfg is not None:
+            pool[model_id] = AzureInferenceProvider(
+                model=fcfg["model"],
+                endpoint=fcfg["endpoint"],
+                api_key=fcfg["api_key_env"],
+                proposer_max_tokens=PROPOSER_TOKEN_BUDGETS.get(model_id, 2048),
+                synth_max_tokens=SYNTH_TOKEN_BUDGETS.get(model_id, 4096),
+            )
+
+    return pool
+
+
+def build_judge() -> Provider:
+    """Judge ayrı bir model. Üretim değil, ayrım yapıyor.
+
+    Tercih sırası: Azure (config.json varsa) -> Anthropic -> OpenAI -> Gemini.
+    Azure GPT hakem, hakemi proposer havuzunun ailesinden çıkarır — bu R-4'ü
+    (judge aile yanlılığı, D-007) hem çözer hem de test eder.
+    """
+    azure = _load_azure_config()
+    if azure is not None:
+        return AzureOpenAIProvider(
+            deployment=azure["deployment_name"],
+            azure_endpoint=azure["azure_endpoint"],
+            api_version=azure["api_version"],
+            api_key=azure["api_key"],
+        )
+    if _has_key("ANTHROPIC_API_KEY"):
+        return AnthropicProvider(model="claude-haiku-4-5-20251001")
+    if _has_key("OPENAI_API_KEY"):
+        return OpenAIProvider(model="gpt-4o", api_key_env="OPENAI_API_KEY")
+    if _has_key("GEMINI_API_KEY"):
+        return OpenAIProvider(
+            model="gemini-3.5-flash",
+            base_url=GEMINI_BASE_URL,
+            api_key_env="GEMINI_API_KEY",
+        )
+    raise RuntimeError("Judge için hiçbir sağlayıcı anahtarı bulunamadı.")
+
+
+PROPOSER_SYSTEM = (
+    "Answer the user's question accurately, clearly and completely.\n"
+    f"{LANGUAGE_RULE}"
+)
+
+JUDGE_SYSTEM = (
+    "You are an evaluator. You will be given a question and several anonymous "
+    "candidate answers.\n"
+    "Select the single best answer. Judge on correctness, completeness and "
+    "relevance to the question. Do NOT reward length.\n"
+    "Output ONLY this JSON object, nothing else:\n"
+    '{"winner": "A", "reason": "one sentence"}'
+)
+
+# Sentezleyicinin çıktısını iki parçaya bölen ayraç. JSON yerine sentinel:
+# nihai cevap markdown/başlık/satır sonu içerir, uzun metni JSON-escape etmek
+# kırılgandır. Ayraç, gerekçeyi cevaptan güvenle ayırır. Bkz. D-019.
+# Eski '===ANSWER===' markdown başlığına benziyordu; model bazen kendi
+# '=== Başlık ===' başlığını yazıp ayracı atlıyordu ve gerekçe cevaba sızıyordu.
+# Markdown'a benzemeyen bir sentinel bu drift'i azaltır (D-025).
+SYNTHESIS_DELIMITER = "<<<FINAL_ANSWER>>>"
+
+SYNTHESIZER_SYSTEM = (
+    "You will be given a question and several anonymous candidate answers.\n"
+    "Your task is to SYNTHESIZE them into one coherent, correct answer — not to summarize them.\n"
+    "- Weight claims supported by multiple candidates more heavily.\n"
+    "- If candidates conflict: resolve it if you can, otherwise state the uncertainty explicitly.\n"
+    "- Do not copy any single candidate verbatim; combine the strongest elements.\n"
+    "- Never write phrases like 'Answer A says' in the final answer. Write the final answer directly.\n"
+    f"{LANGUAGE_RULE}\n"
+    "\n"
+    "Structure your output in EXACTLY two parts, separated by a line containing "
+    f"only {SYNTHESIS_DELIMITER}:\n"
+    "1. First, a brief synthesis rationale (2-4 sentences) written in PAST TENSE, "
+    "describing the merge you have ALREADY performed — which candidates you drew "
+    "from, what specific elements you took from each, what you dropped, and how "
+    "you resolved conflicts. Refer to candidates by their letter (A, B, ...).\n"
+    "   Good: 'I took A's phased rollout and B's job-security policy, and dropped "
+    "C's vague metrics.'\n"
+    "   Bad (do NOT do this): 'I will synthesize these candidates...' or 'These "
+    "three answers all emphasize...' — never announce intentions or summarize the "
+    "candidates; report what you concretely combined.\n"
+    f"2. Then the line {SYNTHESIS_DELIMITER}\n"
+    "3. Then the final answer itself, and nothing else after it.\n"
+    "Write BOTH parts in the language of the question."
+)

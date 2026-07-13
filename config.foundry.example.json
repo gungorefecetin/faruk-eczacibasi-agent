@@ -1,0 +1,5 @@
+{
+  "endpoint": "https://YOUR-RESOURCE.services.ai.azure.com/api/projects/YOUR-PROJECT",
+  "api_key_env": "YOUR-AZURE-FOUNDRY-KEY",
+  "model": "your-deployment-name"
+}
