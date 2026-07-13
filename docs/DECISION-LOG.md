@@ -466,3 +466,20 @@ The `details` expander is now driven by `st.expander("details", expanded=st.sess
 **Why the per-turn key is safe:** the open-key reuses `_render_answer`'s `key`, which is the turn index. Verified (separately) that the two render paths agree per turn — the live-render path uses `len(turns)` *before* the append and the history-loop uses `enumerate` index, and these coincide for every turn. Had they diverged, the flag would have leaked between turns.
 
 **Overturned if:** Streamlit gives `st.expander` a real `key`/persisted state (then drop the manual flag), or a future interaction needs to *close* details programmatically (add the inverse setter).
+
+---
+
+## D-030 — Native Streamlit theme + responsive layout
+
+**Date:** 2026-07-10
+**Status:** Accepted
+
+Two-part change: (1) `.streamlit/config.toml` sets Streamlit's **native theme** from the `ui/theme.py` palette (primary = accent teal, backgrounds/text aligned); (2) `ui/theme.py` gains fluid layout (`clamp()` paddings), a single-surface chat-input treatment, overflow guards, and a ≤640px breakpoint.
+
+**The framing insight:** the "red border" on the chat input — and the red toggle, red tab underline seen in earlier screenshots — were all Streamlit's default `primaryColor` (#ff4b4b) leaking through native widgets our CSS never covered. We had been fighting the framework selector-by-selector; configuring its theme once fixes every current *and future* native widget at the source. The input's ugly double ring was specifically: Streamlit's container border (red) + our own textarea border (teal) stacked — fixed by making the outer container the single surface (subtle border, soft focus glow, `env(safe-area-inset-bottom)`) and stripping all inner drawing.
+
+**Responsive rules:** body must never scroll horizontally; wide content (tables, code blocks) scrolls inside its own container; unbreakable tokens (`claude-sonnet-4-5`, URLs) get `overflow-wrap`; candidate rows wrap gracefully under 640px; container paddings are `clamp()`ed so mobile doesn't spend a third of the viewport on whitespace.
+
+**Verified live** at 390/768/950px against a rendered answer: `scrollWidth == innerWidth` at all three (zero horizontal overflow), input renders as one clean surface with the teal focus glow. Caveat: the table-overflow guard is present but untested against a *rendered* table this round, because the answer's markdown table displayed as raw pipe text — the known markdown-rendering bug in the answer body, which this change deliberately did not touch.
+
+**Overturned if:** a Streamlit upgrade changes the `stChatInput`/`stBottom` DOM (re-pin selectors), or a light theme ships (the palette then needs `prefers-color-scheme` variants in both config and CSS).

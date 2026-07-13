@@ -17,7 +17,15 @@ CSS = f"""
 /* --- Streamlit chrome'unu sadeleştir --- */
 #MainMenu, header, footer {{ visibility: hidden; }}
 .stApp {{ background: {BG}; }}
-.block-container {{ max-width: 780px; padding-top: 3.5rem; padding-bottom: 8rem; }}
+/* Akışkan yerleşim (D-030): sabit rem yerine clamp() — mobilde ekranın
+   üçte biri boşluğa gitmesin, masaüstünde ferahlık korunsun. */
+.block-container {{
+    max-width: 780px;
+    padding-top: clamp(1.25rem, 4vw, 3.5rem);
+    padding-bottom: clamp(4.5rem, 12vw, 8rem);
+    padding-left: clamp(0.9rem, 3vw, 1.5rem);
+    padding-right: clamp(0.9rem, 3vw, 1.5rem);
+}}
 
 /* --- Tipografi --- */
 html, body, [class*="css"] {{
@@ -169,18 +177,63 @@ html, body, [class*="css"] {{
     to   {{ transform: rotate(360deg); }}
 }}
 
-/* --- Girdi kutusu --- */
+/* --- Girdi kutusu (D-030): TEK yüzey, tek çerçeve --- */
+/* Eski hata: Streamlit konteyneri kendi çerçevesini çizerken biz de
+   textarea'ya ikinci bir çerçeve çiziyorduk = çift halka (kırmızı+camgöbeği).
+   Artık dış konteyner tek yüzeyi taşır; içerdekiler çizim yapmaz. */
 [data-testid="stChatInput"] {{
     background: {BG};
+    padding-bottom: env(safe-area-inset-bottom, 0px); /* iPhone home bar */
+}}
+[data-testid="stChatInput"] > div {{
+    background: {SURFACE};
+    border: 1px solid #262626;
+    border-radius: 12px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}}
+[data-testid="stChatInput"] > div:focus-within {{
+    border-color: rgba(125, 211, 192, 0.55);
+    box-shadow: 0 0 0 3px rgba(125, 211, 192, 0.12); /* sert halka değil, yumuşak hâle */
 }}
 [data-testid="stChatInput"] textarea {{
-    background: {SURFACE};
-    border: 1px solid #2a2a2a;
+    background: transparent;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
     color: {INK};
 }}
-[data-testid="stChatInput"] textarea:focus {{
-    border-color: {ACCENT};
-    box-shadow: none;
+/* Alt şerit, sayfa arka planıyla kaynaşsın — ayrı bir bant gibi durmasın */
+[data-testid="stBottom"],
+[data-testid="stBottom"] > div,
+[data-testid="stBottomBlockContainer"] {{
+    background: {BG};
+}}
+
+/* --- Taşma korumaları (D-030): geniş içerik KENDİ kabında kayar, sayfa
+   gövdesi asla yatay kaymaz. Mobilin gerçek katilleri bunlar. --- */
+/* Modellerin ürettiği markdown tabloları ve kod blokları */
+[data-testid="stChatMessage"] table {{
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+}}
+[data-testid="stChatMessage"] pre {{
+    max-width: 100%;
+    overflow-x: auto;
+}}
+/* Kırılmaz uzun dizgeler (claude-sonnet-4-5, URL'ler) sayfayı genişletemesin */
+.answer-body, .judge-reason, .synth-reason {{ overflow-wrap: break-word; }}
+.cand-name {{ overflow-wrap: anywhere; }}
+.meta-line, .stage-line {{ white-space: normal; }}
+
+/* --- Mobil (≤640px): sıkıştır ama boğma --- */
+@media (max-width: 640px) {{
+    .user-bubble {{ max-width: 92%; }}
+    .answer-body {{ font-size: 0.98rem; }}
+    .app-sub {{ margin-bottom: 1.5rem; }}
+    /* Aday satırı: dar ekranda isim + slot + gecikme çarpışırsa zarifçe kır;
+       gecikme sağda hizalı kalır */
+    .cand-row {{ flex-wrap: wrap; row-gap: 0.15rem; }}
 }}
 </style>
 """

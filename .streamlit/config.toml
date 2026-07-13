@@ -1,0 +1,14 @@
+# Streamlit'in YERLİ teması (D-030). Kaynak: ui/theme.py paleti.
+# Bunu ayarlamadan önce her yerli widget (chat input çerçevesi, toggle,
+# sekme alt çizgisi, focus halkaları) Streamlit'in varsayılan KIRMIZI
+# primaryColor'ını (#ff4b4b) sızdırıyordu ve CSS ile tek tek savaşıyorduk.
+# Temayı kaynağında hizalamak, gelecekte eklenecek widget'ları da kapsar.
+[theme]
+base = "dark"
+primaryColor = "#7dd3c0"
+backgroundColor = "#0d0d0d"
+secondaryBackgroundColor = "#141414"
+textColor = "#e8e8e6"
+
+[browser]
+gatherUsageStats = false
