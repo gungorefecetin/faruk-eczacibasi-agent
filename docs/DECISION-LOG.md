@@ -432,3 +432,20 @@ The synthesizer prompt now demands the rationale be written in **past tense, des
 **Second fix bundled here:** `app.py` never called `logging.basicConfig`, so the pipeline's structured INFO line (M3: winner, latencies, R-1 similarity) was **silently discarded in Streamlit mode** — discovered when the diagnostic grep of the UI log came back empty. `app.py` now mirrors `main.py`'s logging setup (INFO + azure/httpx quieted). UI runs are observable again.
 
 **Overturned if:** kimi synthesis timeouts appear (retune budget/timeout jointly, or fixed-fast-synthesizer per D-002's experiment), or the `Provider` interface grows structured responses (then use `finish_reason` to detect and surface truncation instead of over-budgeting).
+
+---
+
+## D-028 — Live stage progress via an optional `on_stage` callback
+
+**Date:** 2026-07-10
+**Status:** Accepted
+
+`run(question, on_stage=None)` emits three events at its stage boundaries — `("querying", {models: N})`, `("judging", {candidates: N})`, `("synthesizing", {winner: model_id})` — through a plain callback. The UI replaces its static spinner text with a single themed line that updates in place: `⟳ querying 5 models… → ⟳ judging 2 candidates… → ⟳ grok won — synthesizing…`.
+
+**Why a callback, not the alternatives:** splitting `run()` into UI-orchestrated steps would duplicate the orchestration in `app.py` (drift risk); a thread+queue is heavy machinery for three discrete events. The callback keeps `core/` UI-blind (CLAUDE.md #1) — it calls a function, nothing more — and `main.py`/tests pass nothing and are byte-identical in behavior. The load-bearing fact that makes this trivially safe: `asyncio.run()` executes the event loop **in the Streamlit script thread**, so the callback may legally touch `st.empty()` — no cross-thread handoff exists.
+
+**Observer guarantee:** `_emit` swallows callback exceptions (debug-logged). A progress-line bug can never cost the user their answer — unit-tested with a deliberately crashing callback.
+
+**Payloads are real data, not decoration:** the candidate count exposes fail-open in real time (a "judging 2 candidates…" out of 5 models is honest), and the winner's name is shown during synthesis — the longest wait becomes the most informative moment. Verified live: stages advanced at t=0.5s / 25.3s / 27.4s with the answer at 42.1s, and the line is cleared in a `finally` on every path including errors.
+
+**Overturned if:** the UI ever needs intra-stage progress (per-model completion ticks during fanout — the event vocabulary extends naturally), or a remote/multi-process UI appears (then the callback becomes a queue at the boundary, not in `core/`).

@@ -34,12 +34,25 @@ st.set_page_config(page_title="Synthesizer", page_icon="◇", layout="centered")
 st.markdown(CSS, unsafe_allow_html=True)
 
 
-def _run_pipeline(question: str):
+def _run_pipeline(question: str, on_stage=None):
     """Async pipeline'ı senkron Streamlit thread'inden çağır.
 
     Her çağrı için taze bir event loop — paylaşılan durum yok, temiz.
+    Kritik detay (D-028): asyncio.run event loop'u BU thread'de çalıştırır,
+    yani on_stage callback'i Streamlit script thread'inde koşar ve st.*
+    elemanlarını güvenle güncelleyebilir — thread/queue makinesine gerek yok.
     """
-    return asyncio.run(run(question))
+    return asyncio.run(run(question, on_stage=on_stage))
+
+
+# Aşama -> kullanıcıya gösterilen satır (D-028). Zengin yük gerçek veridir:
+# model sayısı, hayatta kalan aday sayısı, kazananın adı. Kazananın sentez
+# sırasında görünmesi kasıtlı — en uzun bekleyiş en ilginç hale gelir.
+_STAGE_LABELS = {
+    "querying": "querying {models} models…",
+    "judging": "judging {candidates} candidates…",
+    "synthesizing": "{winner} won — synthesizing…",
+}
 
 
 def _display_names(text: str, labels: dict[str, str]) -> str:
@@ -182,12 +195,31 @@ if question:
         st.markdown(f'<div class="user-bubble">{question}</div>', unsafe_allow_html=True)
 
     with st.chat_message("assistant", avatar="🔹"):
+        # Canlı aşama satırı (D-028): statik spinner yerine, pipeline'ın
+        # gerçekte hangi aşamada olduğunu gösteren tek satır. Callback aynı
+        # thread'de koştuğu için st.empty() içeriğini doğrudan güncelleyebilir.
+        stage_box = st.empty()
+        stage_box.markdown(
+            '<div class="stage-line"><span class="stage-spin">⟳</span> starting…</div>',
+            unsafe_allow_html=True,
+        )
+
+        def _on_stage(stage: str, info: dict) -> None:
+            label = _STAGE_LABELS.get(stage, stage).format(**info)
+            stage_box.markdown(
+                f'<div class="stage-line"><span class="stage-spin">⟳</span> {label}</div>',
+                unsafe_allow_html=True,
+            )
+
         try:
-            with st.spinner("querying models · judging · synthesizing"):
-                result = _run_pipeline(question)
-            _render_answer(result, key=str(len(st.session_state.turns)))
-            st.session_state.turns.append({"q": question, "result": result, "error": None})
+            result = _run_pipeline(question, _on_stage)
         except Exception as exc:
             msg = f"Pipeline failed: {exc}"
             st.error(msg)
             st.session_state.turns.append({"q": question, "result": None, "error": msg})
+        else:
+            _render_answer(result, key=str(len(st.session_state.turns)))
+            st.session_state.turns.append({"q": question, "result": result, "error": None})
+        finally:
+            # Hata dahil her yolda aşama satırı temizlenir — öksüz spinner yok.
+            stage_box.empty()

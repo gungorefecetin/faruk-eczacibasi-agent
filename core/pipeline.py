@@ -6,12 +6,29 @@ import random
 import re
 import string
 import time
+from collections.abc import Callable
 
 from core import config
 from core.models import Candidate, FinalAnswer, JudgeResult
 from core.providers import Provider
 
 logger = logging.getLogger("pipeline")
+
+# Aşama olayı gözlemcisi (D-028): run() sınır geçişlerinde çağrılır.
+# core/ hangi UI'ın dinlediğini bilmez — sadece bir fonksiyon çağırır.
+StageCallback = Callable[[str, dict], None]
+
+
+def _emit(on_stage: StageCallback | None, stage: str, **info) -> None:
+    """Aşama olayını gözlemciye bildir. Gözlemci hattı ASLA düşüremez:
+    UI callback'indeki bir hata isteğin kendisini öldürmemeli — yutulur,
+    debug'a loglanır. (Progress göstergesi uğruna cevap kaybedilmez.)"""
+    if on_stage is None:
+        return
+    try:
+        on_stage(stage, info)
+    except Exception:
+        logger.debug("on_stage callback hatası (yutuldu)", exc_info=True)
 
 
 async def _call_one(model_id: str, provider: Provider, question: str) -> Candidate:
@@ -235,21 +252,26 @@ async def synthesize(question: str, block: str, synthesizer: Provider) -> tuple[
     return _split_synthesis(raw)
 
 
-async def run(question: str) -> FinalAnswer:
+async def run(question: str, on_stage: StageCallback | None = None) -> FinalAnswer:
     pool = config.build_pool()
     judge_model = config.build_judge()
 
+    # D-028: aşama olayları. Yalnızca sınır geçişlerinde, zengin yükle
+    # (model sayısı, aday sayısı, kazanan adı) — süs değil, gerçek veri.
+    _emit(on_stage, "querying", models=len(pool))
     candidates = await fanout(question, pool)
     if len(candidates) < config.MIN_CANDIDATES:
         raise RuntimeError(f"Yeterli cevap yok: {len(candidates)}")
 
     label_map, block = anonymize(candidates)
 
+    _emit(on_stage, "judging", candidates=len(candidates))
     verdict = await judge(question, block, list(label_map), judge_model)
 
     # 3. adım: kazanan cevabı üreten model, sentezleyici koltuğuna oturur.
     winner = label_map[verdict.winner_label]
     synthesizer = pool[winner.model_id]
+    _emit(on_stage, "synthesizing", winner=winner.model_id)
 
     # ARCHITECTURE failure-mode tablosu: sentezleyici başarısız olursa kazanan
     # adayın metnini aynen döndür. Sentez propagate edip request'i düşürmesin.

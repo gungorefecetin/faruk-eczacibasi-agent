@@ -150,6 +150,25 @@ html, body, [class*="css"] {{
 .r1-ok {{ color: {ACCENT}; }}
 .r1-warn {{ color: #e0a35c; }}
 
+/* --- Canlı aşama satırı (D-028): bekleyişin enstrüman göstergesi --- */
+.stage-line {{
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.78rem;
+    color: {MUTED};
+    letter-spacing: 0.02em;
+    padding: 0.25rem 0;
+}}
+.stage-line .stage-spin {{
+    display: inline-block;
+    color: {ACCENT};
+    margin-right: 0.35rem;
+    animation: stage-rotate 1.6s linear infinite;
+}}
+@keyframes stage-rotate {{
+    from {{ transform: rotate(0deg); }}
+    to   {{ transform: rotate(360deg); }}
+}}
+
 /* --- Girdi kutusu --- */
 [data-testid="stChatInput"] {{
     background: {BG};
