@@ -433,6 +433,8 @@ The synthesizer prompt now demands the rationale be written in **past tense, des
 
 **Overturned if:** kimi synthesis timeouts appear (retune budget/timeout jointly, or fixed-fast-synthesizer per D-002's experiment), or the `Provider` interface grows structured responses (then use `finish_reason` to detect and surface truncation instead of over-budgeting).
 
+**Retuned 2026-07-10 (stakeholder request):** kimi's synth budget doubled 12000 → 24000. Per this entry's own clause, the pair moved together: `SYNTH_TIMEOUT_S` 120 → 240 (kimi at ~90-100 tok/s needs ~240s to spend 24k; a doubled budget under the old timeout would have *worsened* outcomes — timeout → draft fallback instead of a merely-truncated answer). Foundry verified to accept a 24k cap. Kimi's *proposer* budget deliberately unchanged at 4096: a larger draft budget would push its draft past the 60s proposer timeout / 8s grace and get it cancelled more often. Practical consequence to watch: a kimi-synthesized long answer may now legitimately take 2-4 minutes.
+
 ---
 
 ## D-028 — Live stage progress via an optional `on_stage` callback

@@ -18,7 +18,10 @@ FANOUT_GRACE_S = 8  # MIN aday geldikten sonra geç kalanlar için bekleme (D-01
 # 60s'de kesip kazanan taslağı (muhtemelen kırpılmış) sunmak, 40sn daha bekleyip
 # gerçek sentezi almaktan kesinlikle kötü. Yavaş üretici (claude ~24 tok/s kötü
 # gününde) + uzun soru = 60s yetmiyor; canlı vakada tam bu yaşandı (D-022).
-SYNTH_TIMEOUT_S = 120
+# 240'a çıkarıldı: kimi'nin sentez bütçesi 24000'e katlandı (aşağıda) ve
+# ~90-100 tok/s hızında 24k ≈ ~240s — bütçe ile timeout BİRLİKTE ayarlanmak
+# zorunda (D-027'nin retune şartı), yoksa büyük bütçe timeout'ta taslağa düşer.
+SYNTH_TIMEOUT_S = 240
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
@@ -51,10 +54,15 @@ PROPOSER_TOKEN_BUDGETS = {
 # Sentez bütçeleri, model başına (D-027). Varsayılan 4096. Kimi reasoning
 # modeli: 4096'da uzun yapılandırılmış sentez TOKEN_LIMIT_REACHED ile ortadan
 # kesildi (canlı vaka); 12000'de doğal bitti (ölçüldü: 9061 token kullandı).
-# grok BİLEREK 4096'da: ~30 tok/s hızında daha büyük bütçe SYNTH_TIMEOUT_S'i
-# (120s) aşar — kesik cevap yerine timeout+fallback riski yaratır.
+# 24000'e katlandı (kullanıcı isteği); Foundry'nin 24k kabul ettiği doğrulandı
+# ve SYNTH_TIMEOUT_S buna eşlik edecek şekilde 240s'ye çıkarıldı — ikisi
+# BİRLİKTE ayarlanır, yoksa büyük bütçe timeout'ta taslağa düşer.
+# grok BİLEREK 4096'da: ~30 tok/s hızında daha büyük bütçe timeout'u zorlar.
+# kimi'nin PROPOSER bütçesi de bilerek 4096'da kaldı: taslakta daha büyük
+# bütçe = daha uzun üretim = 60s proposer timeout'u ve 8s grace'i kaçırıp
+# İPTAL edilme riski — katılımı artırmaz, azaltır.
 SYNTH_TOKEN_BUDGETS = {
-    "kimi": 12000,
+    "kimi": 24000,
 }
 
 LANGUAGE_RULE = "Write your answer in the same language as the user's question."
