@@ -2,6 +2,7 @@
 config.json
 config.grok.json
 config.kimi.json
+.streamlit/secrets.toml
 __pycache__/
 *.pyc
 .venv/
