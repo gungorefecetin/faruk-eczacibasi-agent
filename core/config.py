@@ -1,3 +1,4 @@
+#config.py
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ from core.providers import (
 )
 
 TIMEOUT_S = 60
-MIN_CANDIDATES = 2  # bu sayının altında başarılı cevap varsa pipeline durur
+MIN_CANDIDATES = 3  # bu sayının altında başarılı cevap varsa pipeline durur
 FANOUT_GRACE_S = 8  # MIN aday geldikten sonra geç kalanlar için bekleme (D-017)
 
 # Sentez, hattın SON ve en değerli çağrısı: tüm taslaklar + judge zaten ödendi.
@@ -65,7 +66,13 @@ SYNTH_TOKEN_BUDGETS = {
     "kimi": 24000,
 }
 
-LANGUAGE_RULE = "Write your answer in the same language as the user's question."
+'''LANGUAGE_RULE = "Write your answer in the same language as the user's question."'''
+LANGUAGE_RULE = (
+    "Write your entire response in the same language as the ORIGINAL USER QUESTION. "
+    "The ORIGINAL USER QUESTION is the user's actual request, not candidate answers, "
+    "judge output, wrapper labels, code snippets, comments, examples, or surrounding instructions. "
+    "Do not switch languages."
+)
 
 
 def _has_key(env_var: str) -> bool:
@@ -193,6 +200,7 @@ JUDGE_SYSTEM = (
     "Judge on correctness, completeness, relevance, usefulness, and adherence to the user's language.\n"
     "Do NOT reward length. Prefer clear, accurate and directly useful answers over verbose ones.\n"
     "Penalize hallucinations, unsupported claims, contradictions, evasive answers, and failure to answer the question.\n"
+    "The reason field must be written in the same language as the text inside <original_user_question>.\n"
     "Output ONLY a valid JSON object in this exact schema:\n"
     '{"winner": "<candidate_letter>", "reason": "<one sentence>"}\n'
     "The winner must be exactly one of the provided candidate labels."
@@ -231,5 +239,5 @@ SYNTHESIZER_SYSTEM = (
     "candidates; report what you concretely combined.\n"
     f"2. Then the line {SYNTHESIS_DELIMITER}\n"
     "3. Then the final answer itself, and nothing else after it.\n"
-    "Write BOTH parts in the language of the question."
+    "Write BOTH parts in the same language as the text inside <original_user_question>."
 )
