@@ -51,6 +51,8 @@ st.markdown(CSS, unsafe_allow_html=True)
 #     OPENAI_API_KEY = "..."
 #     ANTHROPIC_API_KEY = "..."
 #     GEMINI_API_KEY = "..."
+#     PERPLEXITY_RESPONSES_API_KEY = "..."   # opsiyonel: "Perplexity Sonar" proposer'ı (/v1/responses)
+#     PERPLEXITY_SEARCH_API_KEY = "..."      # opsiyonel: web-kanıt arama katmanı (/search) — AYRI anahtar
 #     # diğer sağlayıcı gizli anahtarları (Azure/Grok/Kimi vb.)...
 #
 # Streamlit gizli anahtarları os.environ'a da yansıtır, dolayısıyla core.config'in
@@ -207,10 +209,19 @@ def _render_answer(result, key: str) -> None:
     win_ms = win_cand.latency_ms if win_cand else 0
 
     # Sessiz meta satırı: kazanan + gecikme. Detay istemeyene yeter.
+    # Arama kanıtı kullanıldıysa küçük, düşük vurgulu bir "web evidence used"
+    # rozeti eklenir (req #9) — UI'ı kalabalıklaştırmadan; ham sonuç gösterilmez.
+    evidence_badge = ""
+    if getattr(result, "evidence_used", False):
+        evidence_badge = (
+            '<span class="meta-dot">·</span>'
+            '<span class="web-evidence">web evidence used</span>'
+        )
     st.markdown(
         f'<div class="meta-line">via <span class="win">{winner}</span>'
         f'<span class="meta-dot">·</span>{win_ms/1000:.1f}s'
-        f'<span class="meta-dot">·</span>{len(result.candidates)} models</div>',
+        f'<span class="meta-dot">·</span>{len(result.candidates)} models'
+        f'{evidence_badge}</div>',
         unsafe_allow_html=True,
     )
 

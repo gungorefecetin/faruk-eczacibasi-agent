@@ -43,3 +43,6 @@ class FinalAnswer:
     # prompt'ları hâlâ sadece etiket görür; kimlik verdikten SONRA çözülür ve
     # kullanıcıya gösterim için buraya konur.
     labels: dict[str, str] = field(default_factory=dict)
+    # Arama kanıt katmanı bu istekte kullanıldı mı? YALNIZCA UI göstergesi için
+    # ("web evidence used"). Ham arama sonuçları taşınmaz; sadece bu bayrak.
+    evidence_used: bool = False

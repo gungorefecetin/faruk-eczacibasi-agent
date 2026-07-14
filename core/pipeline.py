@@ -9,9 +9,9 @@ import string
 import time
 from collections.abc import Callable
 
-from core import config
+from core import config, search
 from core.models import Candidate, FinalAnswer, JudgeResult
-from core.providers import Provider
+from core.providers import PerplexitySearchProvider, Provider
 
 logger = logging.getLogger("pipeline")
 
@@ -253,15 +253,24 @@ def _split_synthesis(raw: str) -> tuple[str, str]:
     return "", raw
 
 
-async def synthesize(question: str, block: str, synthesizer: Provider) -> tuple[str, str]:
+async def synthesize(question: str, block: str, synthesizer: Provider,
+                     evidence_block: str = "") -> tuple[str, str]:
     """4. adım: kazanan model adayları sentezler; (gerekçe, cevap) döner.
 
     Kritik yolda — timeout ile korunur, ama proposer'lardan daha cömert bir
     tavanla (SYNTH_TIMEOUT_S, D-022): buraya gelindiğinde tüm taslaklar ve
     judge zaten ödenmiş durumda. Sentezi erken kesmek, kullanıcıya kırpılmış
     bir taslak sunmak demek — en pahalı çağrıyı en ucuz anda çöpe atmak.
+
+    evidence_block verilirse (arama kullanıldıysa) sentez promptuna BAĞLAM
+    olarak eklenir — aday DEĞİL (req #6). Judge onu hiç görmedi; sentezleyici
+    çelişkileri çözerken kullanabilir ama nihai cevabın dilini orijinal soru
+    belirler, kanıt wrapper'ı değil.
     """
     '''prompt = f"Soru:\n{question}\n\nAday cevaplar:\n{block}"'''
+    # Kanıt bloğu opsiyonel: yalnızca arama kullanıldıysa eklenir; aksi halde
+    # prompt aramasız yolla birebir aynı (minimal değişiklik).
+    evidence_section = f"\n\n{evidence_block}" if evidence_block else ""
     prompt = f"""
     <original_user_question>
     {question}
@@ -269,11 +278,12 @@ async def synthesize(question: str, block: str, synthesizer: Provider) -> tuple[
 
     <candidate_answers>
     {block}
-    </candidate_answers>
+    </candidate_answers>{evidence_section}
 
     Synthesize a final answer for the original user question.
+    If search evidence is provided above, treat it as background context only, not as a candidate answer; do not invent facts beyond it.
     The required output language is the language of the text inside <original_user_question>.
-    Ignore the language of wrapper labels, candidate answers, judge output, code comments, and examples.
+    Ignore the language of wrapper labels, candidate answers, search evidence, judge output, code comments, and examples.
     """
     # Sentez bütçesi sentezleyicinin kendi özniteliği (D-027): reasoning modeli
     # (kimi) sabit 4096'da görünür cevabı ortadan kesiyordu. Pipeline nedenini
@@ -286,14 +296,52 @@ async def synthesize(question: str, block: str, synthesizer: Provider) -> tuple[
     return _split_synthesis(raw)
 
 
+async def gather_evidence(question: str,
+                          client: PerplexitySearchProvider | None) -> str:
+    """Arama kanıtı topla — gerekiyorsa ve mümkünse (req #2, #3, #7).
+
+    Sırayla: (1) istemci yoksa (anahtar yok) atla, (2) heuristik arama
+    gerektirmiyorsa atla, (3) çağır + biçimlendir. Herhangi bir hata/timeout
+    fail-open: uyarı logla, BOŞ string dön — pipeline kanıtsız devam eder,
+    asla düşmez. Ham gövde/anahtar loglanmaz.
+
+    Dönüş: <search_evidence>...</search_evidence> bloğu ya da "" (kullanılmadı).
+    """
+    if client is None:
+        return ""
+    if not search.should_use_search(question):
+        logger.info("arama atlandı: heuristik güncel bilgi gerektirmiyor")
+        return ""
+    try:
+        results = await asyncio.wait_for(
+            client.search(question), timeout=config.SEARCH_TIMEOUT_S
+        )
+    except Exception as exc:
+        # Fail-open (req #7): kanıtsız devam. exc'i logla ama ham yanıt yok.
+        logger.warning("arama başarısız (%s), kanıtsız devam ediliyor", exc)
+        return ""
+    block = search.format_evidence(results)
+    if not block:
+        logger.info("arama sonuç döndürmedi, kanıtsız devam ediliyor")
+    return block
+
+
 async def run(question: str, on_stage: StageCallback | None = None) -> FinalAnswer:
     pool = config.build_pool()
     judge_model = config.build_judge()
+    search_client = config.build_search()
+
+    # Arama kanıt katmanı (req #2-#5): fanout'tan ÖNCE, yalnızca heuristik
+    # tetiklerse. Kanıt proposer girdisini zenginleştirir; ORİJİNAL soru dil
+    # tespiti/judge/UI için AYNEN korunur. Kanıt bir aday DEĞİL.
+    evidence_block = await gather_evidence(question, search_client)
+    proposer_question = search.augment_question(question, evidence_block)
 
     # aşama olayları. Yalnızca sınır geçişlerinde, zengin yükle
     # (model sayısı, aday sayısı, kazanan adı) — gerçek veri.
     _emit(on_stage, "querying", models=len(pool))
-    candidates = await fanout(question, pool)
+    # Proposer'lar zenginleştirilmiş soruyu görür; judge/UI orijinali görür.
+    candidates = await fanout(proposer_question, pool)
     if len(candidates) < config.MIN_CANDIDATES:
         raise RuntimeError(f"Yeterli cevap yok: {len(candidates)}")
 
@@ -310,7 +358,8 @@ async def run(question: str, on_stage: StageCallback | None = None) -> FinalAnsw
     # ARCHITECTURE failure-mode tablosu: sentezleyici başarısız olursa kazanan
     # adayın metnini aynen döndür. Sentez propagate edip request'i düşürmesin.
     try:
-        reasoning, answer = await synthesize(question, block, synthesizer)
+        reasoning, answer = await synthesize(question, block, synthesizer,
+                                             evidence_block=evidence_block)
     except Exception as exc:
         logger.warning(
             "sentezleyici (%s) başarısız (%s), kazanan aday metnine düşülüyor",
@@ -325,15 +374,18 @@ async def run(question: str, on_stage: StageCallback | None = None) -> FinalAnsw
     # sentez değil seçim yaptı. Yerel string işi, ağ maliyeti yok.
     similarity = difflib.SequenceMatcher(None, answer, winner.text).ratio()
 
+    evidence_used = bool(evidence_block)
+
     # M3 gözlemlenebilirlik: request başına tek yapılandırılmış log satırı.
     logger.info(
         "request tamamlandı: winner=%s synthesizer=%s candidates=%d "
-        "latencies_ms=%s final_winner_similarity=%.3f",
+        "latencies_ms=%s final_winner_similarity=%.3f search_evidence_used=%s",
         winner.model_id,
         winner.model_id,
         len(candidates),
         {c.model_id: c.latency_ms for c in candidates},
         similarity,
+        evidence_used,
     )
 
     return FinalAnswer(
@@ -347,4 +399,7 @@ async def run(question: str, on_stage: StageCallback | None = None) -> FinalAnsw
         # Görüntü katmanı için etiket->model eşlemesi. Prompt'lara asla
         # girmedi; kimlik zaten yukarıda (winner) çözüldü, bu sadece UI'a taşır.
         labels={lbl: c.model_id for lbl, c in label_map.items()},
+        # UI "web evidence used" göstergesi için (req #9). Yalnızca bayrak;
+        # ham arama sonuçları UI'a taşınmaz.
+        evidence_used=evidence_used,
     )

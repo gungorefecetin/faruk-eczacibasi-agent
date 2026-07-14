@@ -1,6 +1,7 @@
 import os
 from abc import ABC, abstractmethod
 
+import aiohttp
 from anthropic import AsyncAnthropic
 from azure.ai.inference.aio import ChatCompletionsClient as AzureInferenceClient
 from azure.core.credentials import AzureKeyCredential
@@ -129,3 +130,190 @@ class AnthropicProvider(Provider):
             messages=[{"role": "user", "content": prompt}],
         )
         return "".join(block.text for block in resp.content if block.type == "text")
+
+
+class PerplexityResponsesProvider(Provider):
+    """Perplexity /v1/responses proposer'ı — web-grounded aday üretir.
+
+    Diğer sağlayıcılardan AYRI bir aile: SDK yok, düz HTTP (aiohttp) ile
+    POST https://api.perplexity.ai/v1/responses çağrılır. Preset tabanlı
+    ("fast-search"), tek bir `input` string alanı bekler — bu yüzden sistem
+    prompt'u ile kullanıcı sorusunu tek metinde güvenle birleştiriyoruz.
+
+    Pipeline bu sağlayıcıyı diğerlerinden ayırt etmez (CLAUDE.md #2): sadece
+    Provider.complete arayüzünü görür. Anahtar env'den okunur, ASLA hardcode
+    edilmez; hata/timeout durumunda pipeline'ın diğer başarısız proposer'lara
+    yaptığı gibi bu aday sessizce düşer (fanout izole eder).
+
+    ANAHTAR AYRIMI (kullanıcı isteği): Responses ve Search API'ları AYRI
+    anahtarlar kullanır — bu proposer YALNIZCA PERPLEXITY_RESPONSES_API_KEY'i
+    okur, Search anahtarına asla dokunmaz.
+    """
+
+    ENDPOINT = "https://api.perplexity.ai/v1/responses"
+    PRESET = "fast-search"
+
+    def __init__(self, model: str, api_key_env: str = "PERPLEXITY_RESPONSES_API_KEY",
+                 proposer_max_tokens: int = 2048, synth_max_tokens: int = 4096):
+        super().__init__(model, proposer_max_tokens, synth_max_tokens)
+        # Anahtar init'te okunur (havuz kurulurken zaten _has_key ile doğrulandı).
+        self._api_key = os.environ[api_key_env]
+
+    @staticmethod
+    def _extract_text(data: dict) -> str:
+        """Perplexity yanıtından SADECE nihai metni çıkar (savunmacı ayrıştırıcı).
+
+        Yanıt şekli sürüme/preset'e göre değişebiliyor; bilinen dört biçim
+        sırayla denenir. Hiçbiri metin vermezse ham JSON'u kullanıcıya SIZDIRMADAN
+        net bir hata yükseltilir (metadata/anahtar/ham gövde asla mesaja girmez).
+        """
+        # 1) Düz kısayol: {"output_text": "..."}
+        text = data.get("output_text")
+        if isinstance(text, str) and text.strip():
+            return text
+
+        # 2) output[].content[].text  (type == "output_text" olanları tercih et)
+        output = data.get("output")
+        if isinstance(output, list):
+            parts: list[str] = []
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    btext = block.get("text")
+                    if isinstance(btext, str) and btext.strip():
+                        parts.append(btext)
+            if parts:
+                return "".join(parts)
+
+        # 3) OpenAI uyumlu biçim: choices[].message.content
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, dict):
+                message = first.get("message")
+                if isinstance(message, dict):
+                    content = message.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return content
+
+        # 4) Hiçbiri yok: ham gövdeyi/anahtarı SIZDIRMADAN net hata (req #8, #9).
+        raise RuntimeError(
+            "Perplexity yanıtından metin çıkarılamadı (beklenmeyen yanıt şekli)."
+        )
+
+    async def complete(self, system: str, prompt: str,
+                       max_tokens: int | None = 2048) -> str:
+        # Preset endpoint tek `input` alanı alır; sistem talimatı ile kullanıcı
+        # sorusunu tek metinde birleştir (req #6). max_tokens arayüz uyumu için
+        # kabul edilir ama fast-search preset'i gövdede kullanmaz.
+        combined = (
+            "System instructions:\n"
+            f"{system}\n\n"
+            "User request:\n"
+            f"{prompt}"
+        )
+        payload = {"preset": self.PRESET, "input": combined}
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        # Session'ı çağrı başına aç/kapat (azure inference sağlayıcısıyla aynı
+        # desen): sızıntısız. Timeout pipeline'ın asyncio.wait_for'u ile ayrıca
+        # da korunur; burada ağ-seviyesi bir tavan koyuyoruz.
+        timeout = aiohttp.ClientTimeout(total=60)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                self.ENDPOINT, json=payload, headers=headers
+            ) as resp:
+                # 4xx/5xx: ham gövdeyi kullanıcıya sızdırma; sadece durum kodu
+                # (req #9). raise_for_status yerine kontrollü, redakte mesaj.
+                if resp.status >= 400:
+                    raise RuntimeError(
+                        f"Perplexity isteği başarısız (HTTP {resp.status})."
+                    )
+                data = await resp.json()
+        return self._extract_text(data)
+
+
+class PerplexitySearchProvider:
+    """Perplexity /search retrieval istemcisi — kanıt (evidence) katmanı.
+
+    KASITLI OLARAK Provider'dan TÜREMEZ (CLAUDE.md #2 + kullanıcı isteği #10):
+    bu bir aday ÜRETMEZ. Bir proposer/judge/synthesizer DEĞİLDİR ve build_pool /
+    build_judge'a asla girmez — Provider arayüzü olmadığı için girmesi de
+    imkânsız. Yalnızca ham arama sonuçları döndürür; onları bir kanıt bloğuna
+    biçimlendirmek pipeline'ın (vendor-neutral) işi.
+
+    ANAHTAR AYRIMI: YALNIZCA PERPLEXITY_SEARCH_API_KEY okur; Responses
+    anahtarına asla dokunmaz. Hata/timeout'ta çağıran taraf kanıtsız devam
+    eder (fail-open) — bu yüzden search() ham sonuç listesi döndürür veya
+    yükseltir; karar üst katmanda.
+    """
+
+    ENDPOINT = "https://api.perplexity.ai/search"
+
+    def __init__(self, api_key_env: str = "PERPLEXITY_SEARCH_API_KEY"):
+        self._api_key = os.environ[api_key_env]
+
+    async def search(self, query: str, max_results: int = 3,
+                     max_tokens_per_page: int = 256,
+                     timeout_s: int = 15) -> list[dict]:
+        """Arama sonuçlarını [{title, url, snippet}, ...] olarak döndür.
+
+        Yanıt şekli sürüme göre değişebildiği için savunmacı ayrıştırma:
+        sonuç listesi `results` (veya `data`) altında olabilir; her sonuçta
+        başlık `title`, url `url`, metin ise `snippet`/`text`/`content`
+        anahtarlarından biriyle gelebilir. Ham gövde/anahtar ASLA sızmaz.
+        """
+        payload = {
+            "query": query,
+            "max_results": max_results,
+            "max_tokens_per_page": max_tokens_per_page,
+        }
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        timeout = aiohttp.ClientTimeout(total=timeout_s)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                self.ENDPOINT, json=payload, headers=headers
+            ) as resp:
+                if resp.status >= 400:
+                    # Ham gövdeyi sızdırma; sadece durum kodu (req #7).
+                    raise RuntimeError(
+                        f"Perplexity search başarısız (HTTP {resp.status})."
+                    )
+                data = await resp.json()
+        return self._normalize(data, max_results)
+
+    @staticmethod
+    def _normalize(data: dict, max_results: int) -> list[dict]:
+        """Ham arama yanıtını temiz [{title,url,snippet}] listesine indir."""
+        raw = data.get("results")
+        if not isinstance(raw, list):
+            raw = data.get("data") if isinstance(data.get("data"), list) else []
+        out: list[dict] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            snippet = (
+                item.get("snippet")
+                or item.get("text")
+                or item.get("content")
+                or ""
+            )
+            out.append({
+                "title": str(item.get("title") or "").strip(),
+                "url": str(item.get("url") or "").strip(),
+                "snippet": str(snippet).strip(),
+            })
+            if len(out) >= max_results:
+                break
+        return out

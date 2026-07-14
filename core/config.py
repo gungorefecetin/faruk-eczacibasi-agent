@@ -8,12 +8,17 @@ from core.providers import (
     AzureInferenceProvider,
     AzureOpenAIProvider,
     OpenAIProvider,
+    PerplexityResponsesProvider,
+    PerplexitySearchProvider,
     Provider,
 )
 
 TIMEOUT_S = 60
 MIN_CANDIDATES = 3  # bu sayının altında başarılı cevap varsa pipeline durur
 FANOUT_GRACE_S = 8  # MIN aday geldikten sonra geç kalanlar için bekleme
+# Arama (Perplexity /search) fanout'tan ÖNCE, seri çalışır — bu yüzden kısa
+# tutulur: kanıt fail-open olduğundan uzun bekleyiş faydadan çok gecikme getirir.
+SEARCH_TIMEOUT_S = 15
 
 # Sentez, hattın SON ve en değerli çağrısı: tüm taslaklar + judge zaten ödendi.
 # 60s'de kesip kazanan taslağı (muhtemelen kırpılmış) sunmak, 40sn daha bekleyip
@@ -165,6 +170,18 @@ def build_pool() -> dict[str, Provider]:
             base_url=GEMINI_BASE_URL,
             api_key_env="GEMINI_API_KEY",
         )
+    # Perplexity Sonar proposer'ı (web-grounded). Yalnızca anahtarı varsa havuza
+    # girer (fail-open, D-008); yoksa sessizce atlanır ve app anahtarsız çalışır.
+    # Diğer proposer'lar gibi fanout'a girer, anonimleşir, hakem kimliğini görmez;
+    # kazanırsa sentezleyici olur. Hakem OLARAK kullanılmaz (build_judge'a eklenmez).
+    # Responses API kendi AYRI anahtarını kullanır (Search anahtarından farklı).
+    if _has_key("PERPLEXITY_RESPONSES_API_KEY"):
+        pool["sonar"] = PerplexityResponsesProvider(
+            model="Perplexity Sonar",
+            api_key_env="PERPLEXITY_RESPONSES_API_KEY",
+            proposer_max_tokens=PROPOSER_TOKEN_BUDGETS.get("sonar", 3072),
+            synth_max_tokens=SYNTH_TOKEN_BUDGETS.get("sonar", 4096),
+        )
     # Azure Foundry inference proposer'ları (Grok, Kimi). config dosyası varsa
     # havuza girer; yoksa sessizce atlanır (fail-open). Grok artık xAI
     # doğrudan yerine Azure üzerinden — bu yüzden ayrı XAI_API_KEY dalı yok.
@@ -209,6 +226,21 @@ def build_judge() -> Provider:
             api_key_env="GEMINI_API_KEY",
         )
     raise RuntimeError("Judge için hiçbir sağlayıcı anahtarı bulunamadı.")
+
+
+def build_search() -> PerplexitySearchProvider | None:
+    """Perplexity Search istemcisini kur — YALNIZCA anahtarı varsa (fail-open).
+
+    Anahtar yoksa None döner; pipeline aramayı atlar ve normal fanout'a devam
+    eder (req #7). Search kendi AYRI anahtarını (PERPLEXITY_SEARCH_API_KEY)
+    kullanır — Responses proposer'ının anahtarıyla asla karışmaz.
+
+    Dönen istemci bir Provider DEĞİL: build_pool/build_judge'a giremez, dolayısıyla
+    aday/hakem/sentezleyici olamaz (kullanıcı isteği #10).
+    """
+    if _has_key("PERPLEXITY_SEARCH_API_KEY"):
+        return PerplexitySearchProvider(api_key_env="PERPLEXITY_SEARCH_API_KEY")
+    return None
 
 
 PROPOSER_SYSTEM = (

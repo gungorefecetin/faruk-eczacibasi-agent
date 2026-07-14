@@ -81,6 +81,8 @@ html, body, [class*="css"] {{
 }}
 .meta-line .win {{ color: {ACCENT}; font-weight: 600; }}
 .meta-dot {{ color: #333; margin: 0 0.5rem; }}
+/* "web evidence used" rozeti: düşük vurgulu, kalabalıklaştırmayan (req #9). */
+.web-evidence {{ color: {ACCENT}; opacity: 0.85; }}
 
 /* --- Details expander: iç organları saklı ama erişilebilir --- */
 [data-testid="stExpander"] {{
