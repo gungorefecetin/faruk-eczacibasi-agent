@@ -4,7 +4,7 @@ import sys
 
 from dotenv import load_dotenv
 
-load_dotenv()  # .env dosyasını os.environ'a yükle (varsa)
+load_dotenv()  # .env dosyasını (eğer varsa) os.environ'a yüklemek
 
 from core.pipeline import run
 
