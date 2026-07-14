@@ -15,7 +15,7 @@ from core.providers import Provider
 
 logger = logging.getLogger("pipeline")
 
-# Aşama olayı gözlemcisi (D-028): run() sınır geçişlerinde çağrılır.
+# Aşama olayı gözlemcisi: run() sınır geçişlerinde çağrılır.
 # core/ hangi UI'ın dinlediğini bilmez — sadece bir fonksiyon çağırır.
 StageCallback = Callable[[str, dict], None]
 
@@ -36,7 +36,7 @@ async def _call_one(model_id: str, provider: Provider, question: str) -> Candida
     """Tek bir proposer'ı çağır. Hata izole edilir, pipeline'ı düşürmez."""
     start = time.perf_counter()
     try:
-        # Taslak bütçesi provider'ın kendi özniteliği (D-021): pipeline hangi
+        # Taslak bütçesi provider'ın kendi özniteliği: pipeline hangi
         # modelin neden hangi bütçeyi istediğini bilmez, sadece okur.
         text = await asyncio.wait_for(
             provider.complete(
@@ -55,10 +55,10 @@ async def _call_one(model_id: str, provider: Provider, question: str) -> Candida
 
 
 async def fanout(question: str, pool: dict[str, Provider]) -> list[Candidate]:
-    """1. adım: adaptif fanout — yeterli aday gelince başla, ölüyü bekleme (D-017).
+    """1. adım: adaptif fanout — yeterli aday gelince başla, ölüyü bekleme.
 
     Naif asyncio.gather en yavaş proposer'ı bekler; ölü/çok-yavaş bir model
-    (ör. kotası dolmuş Gemini 49s asılı kalır) tüm hattı kilitler. Bunun yerine:
+    (ör. kotası dolmuş Gemini, asılı kalır) tüm hattı kilitler. Bunun yerine:
       1. MIN_CANDIDATES kadar başarılı aday gelene kadar bekle,
       2. sonra kısa bir grace period boyunca gelen ekstra adayları da topla
          (kalite: daha çok aday = daha iyi sentez),
@@ -105,7 +105,7 @@ async def fanout(question: str, pool: dict[str, Provider]) -> list[Candidate]:
             len(pending),
         )
 
-    # Fail-open (D-008): başarısız/iptal adaylar düşer, ama sessizce değil.
+    # Fail-open: başarısız/iptal adaylar düşer, ama sessizce değil.
     for c in done:
         if not c.ok:
             logger.warning(
@@ -140,7 +140,7 @@ def _parse_judge(raw: str, valid_labels: list[str]) -> JudgeResult:
                 return JudgeResult(winner, str(data.get("reason", "")), raw)
         except json.JSONDecodeError:
             pass
-    # D-009: ayrıştırma başarısız. İlk etiket rastgele karıştırılmış bir aday,
+    # Ayrıştırma başarısız. İlk etiket rastgele karıştırılmış bir aday,
     # yani bu fallback judge'ı sessizce yazı-tura'ya çevirir. Bu yüzden GÜRÜLTÜLÜ
     # olmalı — sürekli malformed dönen bir judge çalışıyormuş gibi görünmesin.
     logger.warning(
@@ -182,12 +182,15 @@ async def judge(question: str, block: str, labels: list[str], judge_model: Provi
 
 # Gerekçenin başındaki kendi başlığını yakalar: ör. "**Sentez Gerekçesi:**",
 # "Synthesis rationale:", "Rationale:". UI zaten bir etiket gösteriyor, bu
-# tekrar ve ham '**' işaretleri gereksiz (D-019). Muhafazakâr: yalnızca KISA
+# tekrar ve ham '**' işaretleri gereksiz. Muhafazakâr: yalnızca KISA
 # (<= 6 kelime) ve ':' ile biten baştaki bir öneki siler, gerçek metni yemez.
 _REASONING_HEADER_RE = re.compile(
     r"^\s*\*{0,2}\s*[^\n:]{1,60}?:\*{0,2}\s*",
-)
+) 
 
+####
+# Burada başlıkta hatalar gözükebiliyor, düzeltilecek!!!!
+####
 
 def _strip_reasoning_header(reasoning: str) -> str:
     """Gerekçenin başındaki kendi başlığını (varsa) kaldır."""
@@ -210,9 +213,11 @@ def _strip_reasoning_header(reasoning: str) -> str:
 
 
 # Model ayracı atlayıp kendi '=== Başlık ===' markdown başlığını yazdığında
-# (D-025) cevabın başladığı yeri yakalamak için: TEK BAŞINA bir satırda duran,
+# cevabın başladığı yeri yakalamak için: TEK BAŞINA bir satırda duran,
 # === ... === biçimli başlık. Gerekçe düzyazısı bu kalıba uymaz.
 _HEADING_FALLBACK_RE = re.compile(r"(?m)^\s*={2,}\s*.+?\s*={2,}\s*$")
+
+#SIKINTILAR VAR BURADA.
 
 
 def _split_synthesis(raw: str) -> tuple[str, str]:
@@ -285,8 +290,8 @@ async def run(question: str, on_stage: StageCallback | None = None) -> FinalAnsw
     pool = config.build_pool()
     judge_model = config.build_judge()
 
-    # D-028: aşama olayları. Yalnızca sınır geçişlerinde, zengin yükle
-    # (model sayısı, aday sayısı, kazanan adı) — süs değil, gerçek veri.
+    # aşama olayları. Yalnızca sınır geçişlerinde, zengin yükle
+    # (model sayısı, aday sayısı, kazanan adı) — gerçek veri.
     _emit(on_stage, "querying", models=len(pool))
     candidates = await fanout(question, pool)
     if len(candidates) < config.MIN_CANDIDATES:
@@ -314,10 +319,10 @@ async def run(question: str, on_stage: StageCallback | None = None) -> FinalAnsw
         )
         reasoning, answer = "", winner.text
 
-    # R-1 metriği (D-018): nihai cevap kazanan adaya ne kadar benziyor? Birebir
+    # R-1 metriği: nihai cevap kazanan adaya ne kadar benziyor? Birebir
     # eşitlik zayıf bir sinyaldi (tek kelime değişse 'sentez oldu' derdi).
     # difflib oranı 0.0-1.0; ~0.95+ = sentezleyici kendi cevabını cilaladı,
-    # sentez değil seçim yaptı (PRD R-1). Yerel string işi, ağ maliyeti yok.
+    # sentez değil seçim yaptı. Yerel string işi, ağ maliyeti yok.
     similarity = difflib.SequenceMatcher(None, answer, winner.text).ratio()
 
     # M3 gözlemlenebilirlik: request başına tek yapılandırılmış log satırı.
@@ -339,7 +344,7 @@ async def run(question: str, on_stage: StageCallback | None = None) -> FinalAnsw
         judge_reason=verdict.reason,
         winner_similarity=similarity,
         synthesis_reasoning=reasoning,
-        # Görüntü katmanı için etiket->model eşlemesi (D-023). Prompt'lara asla
+        # Görüntü katmanı için etiket->model eşlemesi. Prompt'lara asla
         # girmedi; kimlik zaten yukarıda (winner) çözüldü, bu sadece UI'a taşır.
         labels={lbl: c.model_id for lbl, c in label_map.items()},
     )
