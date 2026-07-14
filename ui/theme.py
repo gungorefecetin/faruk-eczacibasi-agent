@@ -4,8 +4,6 @@ core/ buradan hiçbir şey import etmez — bağımlılık yönü tek yönlü ka
 (CLAUDE.md #1). Bu modül yalnızca app.py tarafından kullanılır.
 """
 
-# Tek vurgu rengi, editoryal bir palet. Klasik "AI mor gradyanı" bilinçli
-# olarak kullanılmadı — sakin, koyu, enstrüman-göstergesi hissi.
 ACCENT = "#7dd3c0"          # yumuşak teal — tek vurgu
 INK = "#e8e8e6"             # ana metin
 MUTED = "#8a8a85"           # ikincil metin, caption'lar
