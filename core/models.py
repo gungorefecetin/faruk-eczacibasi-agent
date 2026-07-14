@@ -33,13 +33,13 @@ class FinalAnswer:
     candidates: list[Candidate] = field(default_factory=list)
     judge_reason: str = ""
     # R-1 sinyali: nihai cevabın kazanan adaya benzerliği (0.0-1.0). Yüksekse
-    # sentez değil seçim yapılmış demektir. Bkz. pipeline._run, D-018.
+    # sentez değil seçim yapılmış demektir.
     winner_similarity: float = 0.0
-    # Sentezleyicinin gerekçesi: adayları neden/nasıl birleştirdiği (D-019).
+    # Sentezleyicinin gerekçesi: adayları neden/nasıl birleştirdiği.
     # Boş olabilir (ayraç gelmezse veya sentez fallback'e düşerse).
     synthesis_reasoning: str = ""
     # Anonim etiket -> model_id eşlemesi (ör. {"A": "chatgpt"}), YALNIZCA görüntü
-    # katmanı için (D-023). Anonimlik invariant'ı bozulmaz: judge/sentezleyici
+    # katmanı için. Anonimlik invariant'ı bozulmaz: judge/sentezleyici
     # prompt'ları hâlâ sadece etiket görür; kimlik verdikten SONRA çözülür ve
     # kullanıcıya gösterim için buraya konur.
     labels: dict[str, str] = field(default_factory=dict)
