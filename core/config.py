@@ -13,12 +13,12 @@ from core.providers import (
 
 TIMEOUT_S = 60
 MIN_CANDIDATES = 3  # bu sayının altında başarılı cevap varsa pipeline durur
-FANOUT_GRACE_S = 8  # MIN aday geldikten sonra geç kalanlar için bekleme (D-017)
+FANOUT_GRACE_S = 8  # MIN aday geldikten sonra geç kalanlar için bekleme
 
 # Sentez, hattın SON ve en değerli çağrısı: tüm taslaklar + judge zaten ödendi.
 # 60s'de kesip kazanan taslağı (muhtemelen kırpılmış) sunmak, 40sn daha bekleyip
 # gerçek sentezi almaktan kesinlikle kötü. Yavaş üretici (claude ~24 tok/s kötü
-# gününde) + uzun soru = 60s yetmiyor; canlı vakada tam bu yaşandı (D-022).
+# gününde) + uzun soru = 60s yetmiyor; canlı vakada tam bu yaşandı.
 # 240'a çıkarıldı: kimi'nin sentez bütçesi 24000'e katlandı (aşağıda) ve
 # ~90-100 tok/s hızında 24k ≈ ~240s — bütçe ile timeout BİRLİKTE ayarlanmak
 # zorunda (D-027'nin retune şartı), yoksa büyük bütçe timeout'ta taslağa düşer.
@@ -40,7 +40,7 @@ FOUNDRY_CONFIGS = {
     "kimi": _ROOT / "config.kimi.json",
 }
 
-# Proposer (taslak) token bütçeleri, model başına (D-021). Ölçüme dayalı:
+# Proposer (taslak) token bütçeleri, model başına. Ölçüme dayalı:
 #  - grok  ~30 tok/s üretiyor; bütçe = doğrudan gecikme kolu (1024 ≈ ~15s).
 #  - kimi  hızlı (~90 tok/s) ama reasoning modeli: görünür cevaptan ÖNCE gizli
 #    düşünmeye token yakar. 1024'te bile sık sık BOŞ döndü — cömert bütçe şart.
@@ -52,7 +52,7 @@ PROPOSER_TOKEN_BUDGETS = {
     "claude": 1024,
 }
 
-# Sentez bütçeleri, model başına (D-027). Varsayılan 4096. Kimi reasoning
+# Sentez bütçeleri, model başına. Varsayılan 4096. Kimi reasoning
 # modeli: 4096'da uzun yapılandırılmış sentez TOKEN_LIMIT_REACHED ile ortadan
 # kesildi (canlı vaka); 12000'de doğal bitti (ölçüldü: 9061 token kullandı).
 # 24000'e katlandı (kullanıcı isteği); Foundry'nin 24k kabul ettiği doğrulandı
@@ -143,7 +143,7 @@ def _load_foundry_config(path: Path, env_prefix: str) -> dict[str, str] | None:
 def build_pool() -> dict[str, Provider]:
     """model_id -> Provider. Yalnızca anahtarı olan modeller havuza girer.
 
-    Fail-open (D-008) inşa zamanına genişletildi: anahtarı olmayan bir model
+    Fail-open inşa zamanına genişletildi: anahtarı olmayan bir model
     sessizce havuzdan düşer, KeyError ile pipeline'ı düşürmez.
     """
     pool: dict[str, Provider] = {}
@@ -166,7 +166,7 @@ def build_pool() -> dict[str, Provider]:
             api_key_env="GEMINI_API_KEY",
         )
     # Azure Foundry inference proposer'ları (Grok, Kimi). config dosyası varsa
-    # havuza girer; yoksa sessizce atlanır (fail-open, D-010). Grok artık xAI
+    # havuza girer; yoksa sessizce atlanır (fail-open). Grok artık xAI
     # doğrudan yerine Azure üzerinden — bu yüzden ayrı XAI_API_KEY dalı yok.
     for model_id, path in FOUNDRY_CONFIGS.items():
         # Env prefix'i model_id'den türetilir: grok -> FOUNDRY_GROK, kimi -> FOUNDRY_KIMI.
@@ -188,7 +188,7 @@ def build_judge() -> Provider:
 
     Tercih sırası: Azure (config.json varsa) -> Anthropic -> OpenAI -> Gemini.
     Azure GPT hakem, hakemi proposer havuzunun ailesinden çıkarır — bu R-4'ü
-    (judge aile yanlılığı, D-007) hem çözer hem de test eder.
+    (judge aile yanlılığı) hem çözer hem de test eder.
     """
     azure = _load_azure_config()
     if azure is not None:
@@ -235,10 +235,10 @@ JUDGE_SYSTEM = (
 
 # Sentezleyicinin çıktısını iki parçaya bölen ayraç. JSON yerine sentinel:
 # nihai cevap markdown/başlık/satır sonu içerir, uzun metni JSON-escape etmek
-# kırılgandır. Ayraç, gerekçeyi cevaptan güvenle ayırır. Bkz. D-019.
+# kırılgandır. Ayraç, gerekçeyi cevaptan güvenle ayırır.
 # Eski '===ANSWER===' markdown başlığına benziyordu; model bazen kendi
 # '=== Başlık ===' başlığını yazıp ayracı atlıyordu ve gerekçe cevaba sızıyordu.
-# Markdown'a benzemeyen bir sentinel bu drift'i azaltır (D-025).
+# Markdown'a benzemeyen bir sentinel bu drift'i azaltır.
 SYNTHESIS_DELIMITER = "<<<FINAL_ANSWER>>>"
 
 SYNTHESIZER_SYSTEM = (
