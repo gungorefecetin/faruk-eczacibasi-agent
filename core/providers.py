@@ -13,11 +13,11 @@ class Provider(ABC):
                  synth_max_tokens: int = 4096):
         self.model = model
         # Proposer (taslak) çağrılarının token bütçesi. Model başına config'de
-        # ayarlanır (D-021): yavaş üreticiler (grok ~30 tok/s, claude uzun yazar)
+        # ayarlanır : yavaş üreticiler (grok ~30 tok/s, claude uzun yazar)
         # düşük tutulur; reasoning modelleri (kimi) gizli düşünmeye token yaktığı
         # için YÜKSEK ister — düşük bütçe cevabı kısaltmaz, BOŞALTIR.
         self.proposer_max_tokens = proposer_max_tokens
-        # Sentez çağrısının bütçesi (D-027). Aynı D-021 dersi sentez aşamasında:
+        # Sentez çağrısının bütçesi.
         # kimi sentezleyici olunca 4096'nın bir kısmını gizli reasoning'e yakar,
         # uzun yapılandırılmış cevap ortasından kesilir (TOKEN_LIMIT_REACHED,
         # canlı vakada tablo satırı ortasında). Reasoning modellere cömert ver.
