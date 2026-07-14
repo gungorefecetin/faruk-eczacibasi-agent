@@ -314,8 +314,8 @@ def _render_answer(result, key: str) -> None:
 # --- Başlık ---
 st.markdown('<div class="app-title">◇ Multi-Model Synthesizer</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="app-sub">Five models answer. A blind judge picks the strongest. '
-    'The winner <span class="accent">synthesizes all five</span> into one.</div>',
+    '<div class="app-sub">Six models answer. A blind judge picks the strongest. '
+    'The winner <span class="accent">synthesizes all six</span> into one.</div>',
     unsafe_allow_html=True,
 )
 
