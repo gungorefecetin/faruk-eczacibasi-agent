@@ -80,38 +80,64 @@ def _has_key(env_var: str) -> bool:
     return bool(os.environ.get(env_var, "").strip())
 
 
+def _config_from_env(prefix: str, fields: tuple[str, ...]) -> dict[str, str] | None:
+    """Bir config sözlüğünü env değişkenlerinden kur: {PREFIX}_{FIELD} (büyük harf).
+
+    Dosya tabanlı config'in bulut karşılığı: Streamlit Community Cloud gizli
+    anahtarları diske YAZMAZ, yalnızca os.environ'a yansır (app.py bunu yapar).
+    Yani config.json / config.grok.json / config.kimi.json bulutta yoktur; alanları
+    env'den okuyoruz. core/ yine Streamlit'ten habersiz — sadece os.environ görür.
+
+    Alanlardan biri bile eksik/boşsa None (fail-open: hakem/model sessizce düşer,
+    dosya yolundaki davranışın aynısı). Örn. prefix="AZURE_JUDGE", field="api_key"
+    -> os.environ["AZURE_JUDGE_API_KEY"].
+    """
+    data: dict[str, str] = {}
+    for field in fields:
+        val = os.environ.get(f"{prefix}_{field.upper()}", "").strip()
+        if not val:
+            return None
+        data[field] = val
+    return data
+
+
 def _load_azure_config() -> dict[str, str] | None:
-    """config.json'u oku. Dosya yok/bozuk/eksik alanlıysa None (hakem düşer).
+    """Azure hakem config'i: önce config.json dosyası, sonra env (AZURE_JUDGE_*).
 
-    Beklenen alanlar: api_key, api_version, azure_endpoint, deployment_name.
+    Dosya yok/bozuk/eksik alanlıysa env'e düşer (bulut yolu); o da yoksa None
+    (hakem düşer). Beklenen alanlar: api_key, api_version, azure_endpoint,
+    deployment_name. Env karşılıkları: AZURE_JUDGE_API_KEY, AZURE_JUDGE_API_VERSION,
+    AZURE_JUDGE_AZURE_ENDPOINT, AZURE_JUDGE_DEPLOYMENT_NAME.
     """
-    if not AZURE_CONFIG_PATH.exists():
-        return None
-    try:
-        data = json.loads(AZURE_CONFIG_PATH.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
     required = ("api_key", "api_version", "azure_endpoint", "deployment_name")
-    if not all(data.get(k) for k in required):
-        return None
-    return data
+    if AZURE_CONFIG_PATH.exists():
+        try:
+            data = json.loads(AZURE_CONFIG_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = {}
+        if all(data.get(k) for k in required):
+            return data
+    # Dosya yok ya da eksik: bulut/gizli-anahtar yolu.
+    return _config_from_env("AZURE_JUDGE", required)
 
 
-def _load_foundry_config(path: Path) -> dict[str, str] | None:
-    """Foundry inference config'ini oku. Yok/bozuk/eksik ise None (model düşer).
+def _load_foundry_config(path: Path, env_prefix: str) -> dict[str, str] | None:
+    """Foundry inference config'i: önce dosya, sonra env ({env_prefix}_*).
 
-    Beklenen alanlar: endpoint, api_key_env (ham anahtar), model.
+    Dosya yok/bozuk/eksik ise env'e düşer (bulut yolu); o da yoksa None (model
+    düşer). Beklenen alanlar: endpoint, api_key_env (ham anahtar), model. Örn.
+    grok için env: FOUNDRY_GROK_ENDPOINT, FOUNDRY_GROK_API_KEY_ENV, FOUNDRY_GROK_MODEL.
     """
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
     required = ("endpoint", "api_key_env", "model")
-    if not all(data.get(k) for k in required):
-        return None
-    return data
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = {}
+        if all(data.get(k) for k in required):
+            return data
+    # Dosya yok ya da eksik: bulut/gizli-anahtar yolu.
+    return _config_from_env(env_prefix, required)
 
 
 def build_pool() -> dict[str, Provider]:
@@ -143,7 +169,8 @@ def build_pool() -> dict[str, Provider]:
     # havuza girer; yoksa sessizce atlanır (fail-open, D-010). Grok artık xAI
     # doğrudan yerine Azure üzerinden — bu yüzden ayrı XAI_API_KEY dalı yok.
     for model_id, path in FOUNDRY_CONFIGS.items():
-        fcfg = _load_foundry_config(path)
+        # Env prefix'i model_id'den türetilir: grok -> FOUNDRY_GROK, kimi -> FOUNDRY_KIMI.
+        fcfg = _load_foundry_config(path, env_prefix=f"FOUNDRY_{model_id.upper()}")
         if fcfg is not None:
             pool[model_id] = AzureInferenceProvider(
                 model=fcfg["model"],

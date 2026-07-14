@@ -485,3 +485,20 @@ Two-part change: (1) `.streamlit/config.toml` sets Streamlit's **native theme** 
 **Verified live** at 390/768/950px against a rendered answer: `scrollWidth == innerWidth` at all three (zero horizontal overflow), input renders as one clean surface with the teal focus glow. Caveat: the table-overflow guard is present but untested against a *rendered* table this round, because the answer's markdown table displayed as raw pipe text — the known markdown-rendering bug in the answer body, which this change deliberately did not touch.
 
 **Overturned if:** a Streamlit upgrade changes the `stChatInput`/`stBottom` DOM (re-pin selectors), or a light theme ships (the palette then needs `prefers-color-scheme` variants in both config and CSS).
+
+---
+
+## D-031 — Streamlit Cloud secrets reach `core/` via `os.environ`, not `st.secrets`
+
+**Date:** 2026-07-14
+**Status:** Accepted
+
+For the Community Cloud demo, the file-based providers — the Azure judge (`config.json`) and the Foundry proposers Grok/Kimi (`config.grok.json`, `config.kimi.json`) — had no way to be configured: Streamlit secrets never touch the filesystem, so those gitignored files simply don't exist on Cloud and the providers dropped out silently via the existing fail-open path. The env-var providers (OpenAI/Anthropic/Gemini) already worked because Streamlit mirrors flat secrets into `os.environ`.
+
+**Decision:** bridge, don't couple. `core.config._load_azure_config` / `_load_foundry_config` gain an **env-var fallback** (`AZURE_JUDGE_*`, `FOUNDRY_GROK_*`, `FOUNDRY_KIMI_*`) taken only when the JSON file is absent or incomplete — file still wins locally. `app.py._bridge_secrets_to_env()` flattens the nested `st.secrets` tables (`[azure_judge]`, `[foundry_grok]`, `[foundry_kimi]`) into exactly those env names, running **after** the auth gate and **before** the pipeline import.
+
+**Why this shape:** `core/` must not import `streamlit` (invariant #1 dependency direction, and nothing in `core/` should know the app's delivery surface). `os.environ` is the neutral seam both `.env` (local) and `st.secrets` (Cloud) already speak. `setdefault` is deliberate — a local `.env`/file value is never overwritten by a secret. The flatten runs post-auth so no provider secret enters the environment before login.
+
+**Verified:** unit-tested all four config paths (file wins / env fallback / partial-env fails-open to `None` / `build_pool` wires Grok+Kimi from env with the `model_id`-derived prefix), and the bridge's env-name mapping + non-overwrite semantics against a fake `st.secrets`. App boots clean (HTTP 200) with the changes. Template documented in `.streamlit/secrets.toml.example` (placeholders only).
+
+**Overturned if:** a provider needs config that can't be expressed as flat env strings (nested/list values — then pass a structured object and teach `core` a richer loader), or Streamlit stops mirroring flat secrets into `os.environ` (then the flat providers need the same explicit bridge too), or `core/` is ever allowed a direct secrets dependency (then the bridge collapses into the loader).

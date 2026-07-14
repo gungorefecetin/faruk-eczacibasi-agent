@@ -3,4 +3,5 @@ anthropic>=0.39
 python-dotenv>=1.0
 streamlit>=1.40
 azure-ai-inference>=1.0.0b9
+azure-core>=1.30  # AzureKeyCredential — imported directly in core/providers.py
 aiohttp>=3.9
